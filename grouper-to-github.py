@@ -1,0 +1,185 @@
+#!/usr/bin/python3
+# vim: set et sw=4 ts=4:
+
+#
+# Given a Grouper group and GitHub org:
+#  - fetch group members
+#  - for each member
+#    + create a repo in a specified github org
+#    + and set authz
+#
+# Requires Grouper and GitHub API secrets.
+#
+# Grouper API examples:
+# https://calnetweb.berkeley.edu/calnet-technologists/calgroups-integration/calgroups-api-information
+#
+
+import argparse
+import json
+import os
+import string
+
+import requests
+
+safe_chars = string.ascii_letters + string.digits + '-'
+
+def escape_chars(s):
+    retval = ''
+    for char in s:
+        if char not in safe_chars: newchar = '-'
+        else: newchar = char
+        retval = retval + newchar
+    return retval
+
+def grouper_get_group_members(auth, group):
+    '''Get members of Grouper {group}.'''
+    # https://calgroups.berkeley.edu/gws/servicesRest/json/v2_2_100/groups/edu:berkeley:app:someapp:testgroup/members
+    # https://github.com/Internet2/grouper/blob/master/grouper-ws/grouper-ws/doc/samples/getMembers/WsSampleGetMembersRestLite_json.txt
+    r = requests.get(
+        '{}/groups/{}/members'.format(config['grouper_base_uri'], group),
+        auth=auth)
+    if not r:
+        raise Exception("Could not get group members.")
+
+    data = r.json()
+    if 'WsRestResultProblem' in data:
+        msg = data['WsRestResultProblem']['resultMetadata']['resultMessage']
+        raise Exception(msg)
+    members = list(map(lambda x: x['attributeValues'][0],
+        data['WsGetMembersLiteResult']['wsSubjects']))
+    return members
+
+def gh_create_org_repo(auth, org, repo):
+    '''Create a repo within a github org.'''
+    uri = '{}/orgs/{}/repos'.format(config['github_base_uri'], org)
+    params = {
+        'name': repo,
+        'private': 'true'
+    }
+    r = requests.post(uri, data=json.dumps(params), auth=auth)
+    
+def gh_teams_uri(base_uri, org):
+    return '{}/orgs/{}/teams'.format(base_uri, org)
+
+def gh_get_org_team_id(auth, org, team):
+    '''
+        Return the id of a team with a github org, or None if
+        there is no such team.
+        https://developer.github.com/v3/teams/
+    '''
+    uri = gh_teams_uri(config['github_base_uri'], org)
+    r = requests.get(uri, auth=auth)
+    teams = r.json()
+    for t in teams:
+        if t['slug'] == team: return t['id']
+    return None
+
+def gh_create_org_team(auth, org, team):
+    '''
+        Create a team within a github org and return its id.
+        https://developer.github.com/v3/teams/
+    '''
+    uri = gh_teams_uri(config['github_base_uri'], org)
+    params = {
+        'name': team,
+        'privacy': 'secret'
+    }
+    r = requests.post(uri, data=json.dumps(params), auth=auth)
+
+    # fetch the id of the team we just created
+    return gh_get_org_team_id(auth, org, team)
+    
+def gh_add_member_to_team(auth, team_id, user):
+    '''
+        Add a user to a team.
+        https://developer.github.com/enterprise/2.14/v3/teams/members/
+    '''
+    uri = '{}/teams/{}/memberships/{}'.format(
+        config['github_base_uri'], team_id, user)
+    params = {
+        'role': 'member',
+    }
+    r = requests.put(uri, data=json.dumps(params), auth=auth)
+    if r.status_code == 404:
+        raise Exception('Bad URI: ' + uri)
+    
+def gh_add_collaborator(auth, owner, repo, user):
+    ''' PUT /repos/:owner/:repo/collaborators/:username'''
+    uri = '{}/repos/{}/{}/collaborators/{}'.format(
+        config['github_base_uri'], owner, repo, user)
+    params = {
+        'permission': 'admin'
+    }
+    r = requests.put(uri, data=json.dumps(params), auth=auth)
+    return r
+
+def has_all_keys(d, keys):
+    return all (k in d for k in keys)
+
+def read_json_data(filename, required_keys=[]):
+    '''Read and validate data from a json file.'''
+    if not os.path.exists(filename):
+        s = "No such file: {}".format(filename)
+        raise Exception(s)
+    data = json.loads(open(filename).read())
+    # check that we've got all of our required keys
+    if not has_all_keys(data, required_keys):
+        s = "Missing parameters in {}: {}".format(
+            filename,
+            set(required_keys) - set(data.keys())
+        )
+        raise Exception(s)
+    return data
+
+## main
+home_dir = os.environ['HOME']
+default_secrets = os.path.join(home_dir, '.grouper-to-github.json')
+
+parser = argparse.ArgumentParser(description="Create per-user GitHub repos from Grouper group membership.")
+parser.add_argument('-v', dest='verbose', action='store_true',
+    help='Be verbose.')
+parser.add_argument('-d', dest='debug', action='store_true', help='Debug.')
+parser.add_argument('-n', dest='dryrun', action='store_true',
+    help='Dry run. Print Grouper membership without updating GitHub.')
+parser.add_argument('-c', dest='config',
+    default='/etc/grouper-to-github.json', help='Configuration file.')
+parser.add_argument('-s', dest='secrets', default=default_secrets,
+    help='Secrets file.')
+args = parser.parse_args()
+
+# read secrets from secrets file
+secrets = read_json_data(args.secrets,
+    ['github_user', 'github_token', 'grouper_user', 'grouper_pass'])
+# read config from config file
+config = read_json_data(args.config,
+    ['orgs', 'github_base_uri', 'grouper_base_uri'])
+
+grouper_auth = requests.auth.HTTPBasicAuth(secrets['grouper_user'],
+    secrets['grouper_pass'])
+github_auth = requests.auth.HTTPBasicAuth(secrets['github_user'],
+    secrets['github_token'])
+
+for o in config['orgs'].keys():
+    org = config['orgs'][o]
+    if not args.debug:
+        team_id = gh_create_org_team(github_auth, o, org['team'])
+        if team_id is None:
+            raise Exception("No team id for {}".format(org['team']))
+    members = grouper_get_group_members(grouper_auth, org['group'])
+    for user in members:
+        if user == "": continue # why does this happen?
+        esc_user = escape_chars(user)
+        if args.verbose:
+            if user == esc_user:
+                print('{}'.format(user))
+            else:
+                print('{:18} escaped: {}'.format(user, esc_user))
+        if args.debug: continue
+        gh_add_member_to_team(github_auth, team_id, esc_user)
+        gh_create_org_repo(github_auth, o, esc_user)
+        # add user as admin collaborator to the repo named after the user
+        owner = o
+        r = gh_add_collaborator(github_auth, owner, esc_user, esc_user)
+        # add admins as admin collaborator 
+        for admin in org['admins']:
+            r = gh_add_collaborator(github_auth, owner, esc_user, admin)
