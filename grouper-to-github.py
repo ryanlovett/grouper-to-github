@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import string
+import pdb
 
 import requests
 
@@ -49,14 +50,30 @@ def grouper_get_group_members(auth, group):
         data['WsGetMembersLiteResult']['wsSubjects']))
     return members
 
+def gh_account_check(auth, user):
+    '''Check if user's github.b.e account is active (i.e., have the logged in to github.b.e).'''
+    uri = '{}/users/{}'.format(config['github_base_uri'], user)
+    r = requests.get(uri, auth=auth)
+    return r.status_code != 404:
+
 def gh_create_org_repo(auth, org, repo):
     '''Create a repo within a github org.'''
+    print("Creating repo for " + repo + ".")
     uri = '{}/orgs/{}/repos'.format(config['github_base_uri'], org)
     params = {
         'name': repo,
-        'private': 'true'
+        'private': 'true',
+        'auto_init': 'true'
     }
+
     r = requests.post(uri, data=json.dumps(params), auth=auth)
+    # Note that repository creation should be idempotent:
+    # API will tell us (with 422 code) if repository exists and will leave it alone.
+    if r.status_code == 404:
+        print("Could not create repo for " + user + ".")
+    if r.status_code == 422:
+        print("Note: Repository already exists.")
+
     
 def gh_teams_uri(base_uri, org):
     return '{}/orgs/{}/teams'.format(base_uri, org)
@@ -94,6 +111,7 @@ def gh_add_member_to_team(auth, team_id, user):
         Add a user to a team.
         https://developer.github.com/enterprise/2.14/v3/teams/members/
     '''
+    print("Adding " + user + " to team.")
     uri = '{}/teams/{}/memberships/{}'.format(
         config['github_base_uri'], team_id, user)
     params = {
@@ -101,8 +119,10 @@ def gh_add_member_to_team(auth, team_id, user):
     }
     r = requests.put(uri, data=json.dumps(params), auth=auth)
     if r.status_code == 404:
-        raise Exception('Bad URI: ' + uri)
-    
+        print("Could not add user " + user + " to team.")
+        #raise Exception('Bad URI: ' + uri)
+
+            
 def gh_add_collaborator(auth, owner, repo, user):
     ''' PUT /repos/:owner/:repo/collaborators/:username'''
     uri = '{}/repos/{}/{}/collaborators/{}'.format(
@@ -111,6 +131,8 @@ def gh_add_collaborator(auth, owner, repo, user):
         'permission': 'admin'
     }
     r = requests.put(uri, data=json.dumps(params), auth=auth)
+    if r.status_code != 204:
+        print("Could not add " + user + " as collaborator for repo " + repo + ".")
     return r
 
 def has_all_keys(d, keys):
@@ -145,6 +167,10 @@ parser.add_argument('-c', dest='config',
     default='/etc/grouper-to-github.json', help='Configuration file.')
 parser.add_argument('-s', dest='secrets', default=default_secrets,
     help='Secrets file.')
+parser.add_argument('-t', dest='team', action='store_true',
+                    help='Create team and add members.')
+parser.add_argument('-u', dest='other_users', default=None,
+                    help='Additional users, comma-separated.')
 args = parser.parse_args()
 
 # read secrets from secrets file
@@ -162,12 +188,16 @@ github_auth = requests.auth.HTTPBasicAuth(secrets['github_user'],
 for o in config['orgs'].keys():
     org = config['orgs'][o]
     if not args.debug:
-        team_id = gh_create_org_team(github_auth, o, org['team'])
-        if team_id is None:
-            raise Exception("No team id for {}".format(org['team']))
+        if args.team:
+            team_id = gh_create_org_team(github_auth, o, org['team'])
+            if team_id is None:
+                raise Exception("No team id for {}".format(org['team']))
     members = grouper_get_group_members(grouper_auth, org['group'])
+    if args.other_users != None:
+        print("Including non-Calgroup users: ", args.other_users)
+        members.extend(args.other_users.split(','))
     for user in members:
-        if user == "": continue # why does this happen?
+        if user == "": continue # why does this happen? (This also happened for Stat 243 in Fall 2019....)
         esc_user = escape_chars(user)
         if args.verbose:
             if user == esc_user:
@@ -175,11 +205,18 @@ for o in config['orgs'].keys():
             else:
                 print('{:18} escaped: {}'.format(user, esc_user))
         if args.debug: continue
-        gh_add_member_to_team(github_auth, team_id, esc_user)
-        gh_create_org_repo(github_auth, o, esc_user)
-        # add user as admin collaborator to the repo named after the user
-        owner = o
-        r = gh_add_collaborator(github_auth, owner, esc_user, esc_user)
-        # add admins as admin collaborator 
-        for admin in org['admins']:
-            r = gh_add_collaborator(github_auth, owner, esc_user, admin)
+        # Only proceed with user if they have an active github.b.e account.
+        # Otherwise, repository would be created but user would not be a member
+        # of their own repository.
+        if gh_account_check(github_auth, esc_user):
+            if args.team:
+                gh_add_member_to_team(github_auth, team_id, esc_user)
+            gh_create_org_repo(github_auth, o, esc_user)
+            # add user as admin collaborator to the repo named after the user
+            owner = o
+            r = gh_add_collaborator(github_auth, owner, esc_user, esc_user)
+            # add admins as admin collaborator
+            for admin in org['admins']:
+                r = gh_add_collaborator(github_auth, owner, esc_user, admin)
+        else:
+            print("User account not yet activated for " + esc_user + ".")
