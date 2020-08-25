@@ -54,7 +54,7 @@ def gh_account_check(auth, user):
     '''Check if user's github.b.e account is active (i.e., have the logged in to github.b.e).'''
     uri = '{}/users/{}'.format(config['github_base_uri'], user)
     r = requests.get(uri, auth=auth)
-    return r.status_code != 404:
+    return r.status_code != 404
 
 def gh_create_org_repo(auth, org, repo):
     '''Create a repo within a github org.'''
