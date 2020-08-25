@@ -2,7 +2,7 @@
 # vim: set et sw=4 ts=4:
 
 #
-# Given a Grouper group and GitHub org:
+# Given a Grouper group (or a list of Berkeley email addresses) and GitHub org:
 #  - fetch group members
 #  - for each member
 #    + create a repo in a specified github org
@@ -49,6 +49,17 @@ def grouper_get_group_members(auth, group):
     members = list(map(lambda x: x['attributeValues'][0],
         data['WsGetMembersLiteResult']['wsSubjects']))
     return members
+
+def other_users_parse(text):
+    vals = []
+    text = text.split(',')
+    for idx, value in enumerate(text):
+        tmp = value.split('@')
+        if len(tmp) == 2 and tmp[1] != "berkeley.edu":
+            print("Found non-Berkeley email: " + value + ". Omitting.")
+        else:
+            vals.append(tmp[0])
+    return(vals)
 
 def gh_account_check(auth, user):
     '''Check if user's github.b.e account is active (i.e., have the logged in to github.b.e).'''
@@ -163,6 +174,7 @@ parser.add_argument('-v', dest='verbose', action='store_true',
 parser.add_argument('-d', dest='debug', action='store_true', help='Debug.')
 parser.add_argument('-n', dest='dryrun', action='store_true',
     help='Dry run. Print Grouper membership without updating GitHub.')
+parser.add_argument('-g', dest='use_grouper', action='store_true')
 parser.add_argument('-c', dest='config',
     default='/etc/grouper-to-github.json', help='Configuration file.')
 parser.add_argument('-s', dest='secrets', default=default_secrets,
@@ -170,18 +182,25 @@ parser.add_argument('-s', dest='secrets', default=default_secrets,
 parser.add_argument('-t', dest='team', action='store_true',
                     help='Create team and add members.')
 parser.add_argument('-u', dest='other_users', default=None,
-                    help='Additional users, comma-separated.')
+                    help='Additional users, comma-separated (either CalNet usernames or @berkeley.edu email addresses.')
 args = parser.parse_args()
 
 # read secrets from secrets file
-secrets = read_json_data(args.secrets,
-    ['github_user', 'github_token', 'grouper_user', 'grouper_pass'])
+if use_grouper:
+    secrets = read_json_data(args.secrets,
+        ['github_user', 'github_token', 'grouper_user', 'grouper_pass'])
+else:
+    secrets = read_json_data(args.secrets,
+        ['github_user', 'github_token'])
+    
 # read config from config file
 config = read_json_data(args.config,
     ['orgs', 'github_base_uri', 'grouper_base_uri'])
 
-grouper_auth = requests.auth.HTTPBasicAuth(secrets['grouper_user'],
-    secrets['grouper_pass'])
+if use_grouper:
+    grouper_auth = requests.auth.HTTPBasicAuth(secrets['grouper_user'],
+        secrets['grouper_pass'])
+
 github_auth = requests.auth.HTTPBasicAuth(secrets['github_user'],
     secrets['github_token'])
 
@@ -192,10 +211,13 @@ for o in config['orgs'].keys():
             team_id = gh_create_org_team(github_auth, o, org['team'])
             if team_id is None:
                 raise Exception("No team id for {}".format(org['team']))
-    members = grouper_get_group_members(grouper_auth, org['group'])
+    if use_grouper:
+        members = grouper_get_group_members(grouper_auth, org['group'])
+    else:
+        members = []
     if args.other_users != None:
         print("Including non-Calgroup users: ", args.other_users)
-        members.extend(args.other_users.split(','))
+        members.extend(other_users_parse(other_users))
     for user in members:
         if user == "": continue # why does this happen? (This also happened for Stat 243 in Fall 2019....)
         esc_user = escape_chars(user)

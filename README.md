@@ -1,15 +1,17 @@
 # grouper-to-github
 
 A python script that creates GitHub repositories and sets repo authorization
-based on the membership of a Grouper group.
+based on the membership of a Grouper group (or a list of CalNet usernames).
 
 Requires:
-  * an existing grouper group
-  * grouper credentials
+  * an existing grouper group (optional)
+  * grouper credentials (optional)
   * an existing github organization
   * github credentials
 
 ## Notes
+
+If one wants to use a CalGroup, this is the default (setting -g to True). If one only wants to use a comma-separated list list of CalNet IDs, set -g to False and simply use -u.
 
 One can create a CalGroup for a course via https://github.com/ryanlovett/sis-to-calgroups. This uses Travis to automatically create CalGroup groups whenever a course is put into the courses/ subdirectory there. One needs the SIS class ID.
 
@@ -24,6 +26,8 @@ Before running the script to provision the repositories, ask students to login o
 Important: by default all members can read all repositories. So all students could see other student repositories. To modify this globally for the org, go to https://github.berkeley.edu/organizations/<org_name>/settings/member_privileges and change default permissions from Read to None.
 
 Give any GSIs admin access to the organization. One would presumably also include them in the `admins` in the config, though having them as an admin for the org may obviate the need for this.
+
+One can provide CalNet user names (which can be in the form of @berkeley.edu email addresses as a comma-separated list) via the -u flag.
 
 ## Example files
 
@@ -54,7 +58,7 @@ Secrets file:
 
 `grouper-to-github.py -c ./config.json -s ./secrets.json`
 
-## Issues to consider
+## Issues to consider (as of fall 2019)
 
 We now have a flag, -u, for `grouper-to-github.py` that allows addition of users not in the CalGroup based on their CalNet username.
 
