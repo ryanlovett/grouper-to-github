@@ -11,7 +11,7 @@ Requires:
 
 ## Notes
 
-If one wants to use a CalGroup, this is the default (setting -g to True). If one only wants to use a comma-separated list list of CalNet IDs, set -g to False and simply use -u.
+If one wants to use a CalGroup, one now needs to add the -g flag. If one only wants to use a comma-separated list list of CalNet IDs, simply use -u.
 
 One can create a CalGroup for a course via https://github.com/ryanlovett/sis-to-calgroups. This uses Travis to automatically create CalGroup groups whenever a course is put into the courses/ subdirectory there. One needs the SIS class ID.
 

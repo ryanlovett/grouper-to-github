@@ -186,7 +186,7 @@ parser.add_argument('-u', dest='other_users', default=None,
 args = parser.parse_args()
 
 # read secrets from secrets file
-if use_grouper:
+if args.use_grouper:
     secrets = read_json_data(args.secrets,
         ['github_user', 'github_token', 'grouper_user', 'grouper_pass'])
 else:
@@ -197,7 +197,7 @@ else:
 config = read_json_data(args.config,
     ['orgs', 'github_base_uri', 'grouper_base_uri'])
 
-if use_grouper:
+if args.use_grouper:
     grouper_auth = requests.auth.HTTPBasicAuth(secrets['grouper_user'],
         secrets['grouper_pass'])
 
@@ -211,13 +211,13 @@ for o in config['orgs'].keys():
             team_id = gh_create_org_team(github_auth, o, org['team'])
             if team_id is None:
                 raise Exception("No team id for {}".format(org['team']))
-    if use_grouper:
+    if args.use_grouper:
         members = grouper_get_group_members(grouper_auth, org['group'])
     else:
         members = []
     if args.other_users != None:
         print("Including non-Calgroup users: ", args.other_users)
-        members.extend(other_users_parse(other_users))
+        members.extend(other_users_parse(args.other_users))
     for user in members:
         if user == "": continue # why does this happen? (This also happened for Stat 243 in Fall 2019....)
         esc_user = escape_chars(user)
